@@ -36,10 +36,35 @@ function ScheduleGenerator() {
         reader.readAsArrayBuffer(file);
     };
 
-    const getStaffPriority = (staff, desk) => {
+    const getHoursWorked = (staffName, schedule) => {
+        let hoursWorked = 0;
+        Object.entries(schedule).forEach(([timeSlot, desks]) => {
+            Object.values(desks).forEach(staffInfo => {
+                if (staffInfo.name === staffName) {
+                    const [start, end] = timeSlot.split('-');
+                    const [startHour] = start.split(':').map(Number);
+                    const [endHour] = end.split(':').map(Number);
+                    hoursWorked += endHour - startHour;
+                }
+            });
+        });
+        return hoursWorked;
+    };
+
+    const getStaffPriority = (staff, desk, schedule, timeSlot) => {
         const preferredDesks = staff.PreferredDesk.split(',').map(d => d.trim());
         const priorityIndex = preferredDesks.indexOf(desk);
-        return priorityIndex >= 0 ? priorityIndex : 999;
+        
+        // Calculate current hours worked
+        const hoursWorked = getHoursWorked(staff.Name, schedule);
+        
+        // Heavy penalty if already worked 4 or more hours
+        const hoursPenalty = hoursWorked >= 4 ? 1000 : hoursWorked * 10;
+        
+        // Base priority from desk preference
+        const basePriority = priorityIndex >= 0 ? priorityIndex : 100;
+        
+        return basePriority + hoursPenalty;
     };
 
     const generateDeskSchedule = () => {
@@ -64,6 +89,8 @@ function ScheduleGenerator() {
                 staff[endColumn] !== 'OFF'
             );
 
+            console.log('Working staff:', workingStaff);
+
             const schedule = {};
             
             timeSlots.forEach(slot => {
@@ -75,14 +102,23 @@ function ScheduleGenerator() {
                     const availableStaff = workingStaff.filter(staff =>
                         !assignedStaff.has(staff.Name) &&
                         staff.PreferredDesk.split(',')[0].trim() === desk
+                    ).sort((a, b) => 
+                        getStaffPriority(a, desk, schedule, `${slot.start}-${slot.end}`) -
+                        getStaffPriority(b, desk, schedule, `${slot.start}-${slot.end}`)
                     );
                     
                     if (availableStaff.length > 0) {
-                        schedule[`${slot.start}-${slot.end}`][desk] = {
-                            name: availableStaff[0].Name,
-                            isPrimaryPreference: true
-                        };
-                        assignedStaff.add(availableStaff[0].Name);
+                        const staffMember = availableStaff[0];
+                        const hoursWorked = getHoursWorked(staffMember.Name, schedule);
+                        
+                        if (hoursWorked < 4) {
+                            schedule[`${slot.start}-${slot.end}`][desk] = {
+                                name: staffMember.Name,
+                                isPrimaryPreference: true,
+                                hoursWorked: hoursWorked
+                            };
+                            assignedStaff.add(staffMember.Name);
+                        }
                     }
                 });
 
@@ -92,14 +128,23 @@ function ScheduleGenerator() {
                         const availableStaff = workingStaff.filter(staff =>
                             !assignedStaff.has(staff.Name) &&
                             staff.PreferredDesk.includes(desk)
-                        ).sort((a, b) => getStaffPriority(a, desk) - getStaffPriority(b, desk));
+                        ).sort((a, b) => 
+                            getStaffPriority(a, desk, schedule, `${slot.start}-${slot.end}`) -
+                            getStaffPriority(b, desk, schedule, `${slot.start}-${slot.end}`)
+                        );
                         
                         if (availableStaff.length > 0) {
-                            schedule[`${slot.start}-${slot.end}`][desk] = {
-                                name: availableStaff[0].Name,
-                                isPrimaryPreference: false
-                            };
-                            assignedStaff.add(availableStaff[0].Name);
+                            const staffMember = availableStaff[0];
+                            const hoursWorked = getHoursWorked(staffMember.Name, schedule);
+                            
+                            if (hoursWorked < 4) {
+                                schedule[`${slot.start}-${slot.end}`][desk] = {
+                                    name: staffMember.Name,
+                                    isPrimaryPreference: false,
+                                    hoursWorked: hoursWorked
+                                };
+                                assignedStaff.add(staffMember.Name);
+                            }
                         }
                     }
                 });
@@ -109,18 +154,33 @@ function ScheduleGenerator() {
                     if (!schedule[`${slot.start}-${slot.end}`][desk]) {
                         const availableStaff = workingStaff.filter(staff =>
                             !assignedStaff.has(staff.Name)
+                        ).sort((a, b) => 
+                            getHoursWorked(a.Name, schedule) - getHoursWorked(b.Name, schedule)
                         );
                         
                         if (availableStaff.length > 0) {
-                            schedule[`${slot.start}-${slot.end}`][desk] = {
-                                name: availableStaff[0].Name,
-                                isPrimaryPreference: false
-                            };
-                            assignedStaff.add(availableStaff[0].Name);
+                            const staffMember = availableStaff[0];
+                            const hoursWorked = getHoursWorked(staffMember.Name, schedule);
+                            
+                            if (hoursWorked < 4) {
+                                schedule[`${slot.start}-${slot.end}`][desk] = {
+                                    name: staffMember.Name,
+                                    isPrimaryPreference: false,
+                                    hoursWorked: hoursWorked
+                                };
+                                assignedStaff.add(staffMember.Name);
+                            } else {
+                                schedule[`${slot.start}-${slot.end}`][desk] = {
+                                    name: 'No staff available',
+                                    isPrimaryPreference: false,
+                                    hoursWorked: 0
+                                };
+                            }
                         } else {
                             schedule[`${slot.start}-${slot.end}`][desk] = {
                                 name: 'No staff available',
-                                isPrimaryPreference: false
+                                isPrimaryPreference: false,
+                                hoursWorked: 0
                             };
                         }
                     }
@@ -192,9 +252,14 @@ function ScheduleGenerator() {
                                             >
                                                 <div className="font-medium">{desk}</div>
                                                 <div>{staffInfo.name}</div>
-                                                {staffInfo.isPrimaryPreference && 
-                                                    <div className="text-xs text-green-600 mt-1">Primary Preference</div>
-                                                }
+                                                {staffInfo.name !== 'No staff available' && (
+                                                    <div className="text-xs text-gray-600">
+                                                        Hours worked: {staffInfo.hoursWorked}
+                                                        {staffInfo.isPrimaryPreference && 
+                                                            <span className="text-green-600 ml-2">Primary Preference</span>
+                                                        }
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
