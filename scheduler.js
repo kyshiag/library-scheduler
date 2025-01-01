@@ -192,6 +192,49 @@ function ScheduleGenerator() {
         }
     };
 
+    const exportToWord = () => {
+        const scheduleHTML = `
+            <html>
+            <head>
+                <style>
+                    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+                    th, td { border: 1px solid black; padding: 8px; text-align: left; }
+                    th { background-color: #f0f0f0; }
+                    .primary-preference { color: green; }
+                    h1 { text-align: center; }
+                    h2 { color: #2c5282; margin-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <h1>Desk Schedule for ${selectedDate}</h1>
+                ${Object.entries(deskSchedule).map(([timeSlot, desks]) => `
+                    <h2>${timeSlot}</h2>
+                    <table>
+                        <tr>
+                            ${Object.entries(desks).map(([desk, staffInfo]) => `
+                                <td>
+                                    <strong>${desk}</strong><br/>
+                                    ${staffInfo.name}<br/>
+                                    ${staffInfo.name !== 'No staff available' ? 
+                                        `Hours worked: ${staffInfo.hoursWorked.toFixed(1)}` : ''}
+                                    ${staffInfo.isPrimaryPreference ? 
+                                        '<br/><span class="primary-preference">Primary Preference</span>' : ''}
+                                </td>
+                            `).join('')}
+                        </tr>
+                    </table>
+                `).join('')}
+            </body>
+            </html>
+        `;
+
+        const blob = new Blob([scheduleHTML], { type: 'application/msword' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `Schedule_${selectedDate}.doc`;
+        link.click();
+    };
+
     return (
         <div className="max-w-4xl mx-auto p-4">
             <div className="bg-white shadow rounded-lg p-6">
@@ -224,13 +267,24 @@ function ScheduleGenerator() {
                         </div>
                     )}
 
-                    <button
-                        onClick={generateDeskSchedule}
-                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-                        disabled={!weeklySchedule || !selectedDate}
-                    >
-                        Generate Desk Schedule
-                    </button>
+                    <div className="flex space-x-4">
+                        <button
+                            onClick={generateDeskSchedule}
+                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            disabled={!weeklySchedule || !selectedDate}
+                        >
+                            Generate Desk Schedule
+                        </button>
+
+                        {deskSchedule && (
+                            <button
+                                onClick={exportToWord}
+                                className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                            >
+                                Export to Word
+                            </button>
+                        )}
+                    </div>
 
                     {deskSchedule && (
                         <div className="mt-6">
