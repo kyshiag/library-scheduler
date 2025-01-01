@@ -33,7 +33,6 @@ function ScheduleGenerator() {
                 const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
                 const jsonData = XLSX.utils.sheet_to_json(firstSheet);
                 
-                // Process the data to correct format
                 const processedData = jsonData.map(row => ({
                     Name: row.__EMPTY,
                     PreferredDesk: row.PreferredDesk,
@@ -62,7 +61,6 @@ function ScheduleGenerator() {
 
         reader.readAsArrayBuffer(file);
     };
-
     const timeToMinutes = (timeStr) => {
         const [hours, minutes] = timeStr.split(':').map(Number);
         return hours * 60 + minutes;
@@ -191,59 +189,58 @@ function ScheduleGenerator() {
             console.error('Schedule generation error:', err);
         }
     };
+    const exportToWord = () => {
+        // Helper function to convert 24h to 12h format
+        const formatTime = (time24) => {
+            const [hours, minutes] = time24.split(':');
+            const hour = parseInt(hours);
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = hour % 12 || 12;
+            return `${hour12}:${minutes} ${ampm}`;
+        };
 
-const exportToWord = () => {
-    // Helper function to convert 24h to 12h format
-    const formatTime = (time24) => {
-        const [hours, minutes] = time24.split(':');
-        const hour = parseInt(hours);
-        const ampm = hour >= 12 ? 'PM' : 'AM';
-        const hour12 = hour % 12 || 12;
-        return `${hour12}:${minutes} ${ampm}`;
+        // Helper function to format time slot
+        const formatTimeSlot = (timeSlot) => {
+            const [start, end] = timeSlot.split('-');
+            return `${formatTime(start)} - ${formatTime(end)}`;
+        };
+
+        const scheduleHTML = `
+            <html>
+            <head>
+                <style>
+                    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+                    th, td { border: 1px solid black; padding: 8px; text-align: left; }
+                    th { background-color: #f0f0f0; }
+                    h1 { text-align: center; }
+                    h2 { color: #2c5282; margin-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <h1>Desk Schedule for ${selectedDate}</h1>
+                ${Object.entries(deskSchedule).map(([timeSlot, desks]) => `
+                    <h2>${formatTimeSlot(timeSlot)}</h2>
+                    <table>
+                        <tr>
+                            ${Object.entries(desks).map(([desk, staffInfo]) => `
+                                <td>
+                                    <strong>${desk}</strong><br/>
+                                    ${staffInfo.name}
+                                </td>
+                            `).join('')}
+                        </tr>
+                    </table>
+                `).join('')}
+            </body>
+            </html>
+        `;
+
+        const blob = new Blob([scheduleHTML], { type: 'application/msword' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `Schedule_${selectedDate}.doc`;
+        link.click();
     };
-
-    // Helper function to format time slot
-    const formatTimeSlot = (timeSlot) => {
-        const [start, end] = timeSlot.split('-');
-        return `${formatTime(start)} - ${formatTime(end)}`;
-    };
-
-    const scheduleHTML = `
-        <html>
-        <head>
-            <style>
-                table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-                th, td { border: 1px solid black; padding: 8px; text-align: left; }
-                th { background-color: #f0f0f0; }
-                h1 { text-align: center; }
-                h2 { color: #2c5282; margin-top: 20px; }
-            </style>
-        </head>
-        <body>
-            <h1>Desk Schedule for ${selectedDate}</h1>
-            ${Object.entries(deskSchedule).map(([timeSlot, desks]) => `
-                <h2>${formatTimeSlot(timeSlot)}</h2>
-                <table>
-                    <tr>
-                        ${Object.entries(desks).map(([desk, staffInfo]) => `
-                            <td>
-                                <strong>${desk}</strong><br/>
-                                ${staffInfo.name}
-                            </td>
-                        `).join('')}
-                    </tr>
-                </table>
-            `).join('')}
-        </body>
-        </html>
-    `;
-
-    const blob = new Blob([scheduleHTML], { type: 'application/msword' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `Schedule_${selectedDate}.doc`;
-    link.click();
-};
 
     return (
         <div className="max-w-4xl mx-auto p-4">
