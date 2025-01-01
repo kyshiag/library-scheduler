@@ -24,57 +24,39 @@ function ScheduleGenerator() {
                 const workbook = XLSX.read(data, { type: 'array' });
                 const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
                 const jsonData = XLSX.utils.sheet_to_json(firstSheet);
-                console.log('Loaded schedule data:', jsonData);
                 setWeeklySchedule(jsonData);
                 setError('');
             } catch (err) {
                 setError('Error processing Excel file: ' + err.message);
-                console.error('Excel processing error:', err);
             }
         };
 
         reader.readAsArrayBuffer(file);
     };
 
-    const timeToHours = (timeStr) => {
-        const [hours, minutes] = timeStr.split(':').map(Number);
-        return hours + minutes / 60;
+    const calculateHoursWorked = (staffName, currentSchedule) => {
+        let hours = 0;
+        Object.entries(currentSchedule).forEach(([timeSlot, desks]) => {
+            Object.values(desks).forEach(staffInfo => {
+                if (staffInfo.name === staffName) {
+                    const [start, end] = timeSlot.split('-');
+                    const startHour = parseInt(start.split(':')[0]);
+                    const endHour = parseInt(end.split(':')[0]);
+                    hours += endHour - startHour;
+                }
+            });
+        });
+        return hours;
     };
 
-    const getStaffPriority = (staff, desk, schedule, timeSlot, currentSlotIndex) => {
-        const preferredDesks = staff.PreferredDesk.split(',').map(d => d.trim());
-        const priorityIndex = preferredDesks.indexOf(desk);
-        
-        // Calculate total and consecutive hours
-        let totalHours = 0;
-        let consecutiveHours = 0;
-        
-        // Check previous assignments
-        for (let i = 0; i <= currentSlotIndex; i++) {
-            const slot = timeSlots[i];
-            const slotKey = `${slot.start}-${slot.end}`;
-            if (schedule[slotKey]) {
-                Object.entries(schedule[slotKey]).forEach(([deskName, staffInfo]) => {
-                    if (staffInfo.name === staff.Name) {
-                        const [start, end] = slotKey.split('-');
-                        totalHours += timeToHours(end) - timeToHours(start);
-                        
-                        if (deskName === desk) {
-                            consecutiveHours += timeToHours(end) - timeToHours(start);
-                        } else {
-                            consecutiveHours = 0;
-                        }
-                    }
-                });
-            }
-        }
+    const hasWorkedConsecutiveHours = (staffName, desk, currentSchedule, currentSlot) => {
+        const currentIndex = timeSlots.findIndex(slot => 
+            `${slot.start}-${slot.end}` === currentSlot
+        );
+        if (currentIndex <= 0) return false;
 
-        // Calculate penalties
-        const consecutivePenalty = consecutiveHours >= 2 ? 1000 : consecutiveHours * 100;
-        const totalHoursPenalty = totalHours >= 4 ? 2000 : totalHours * 200;
-        const basePriority = priorityIndex >= 0 ? priorityIndex * 50 : 500;
-
-        return basePriority + consecutivePenalty + totalHoursPenalty;
+        const previousSlot = `${timeSlots[currentIndex - 1].start}-${timeSlots[currentIndex - 1].end}`;
+        return currentSchedule[previousSlot]?.[desk]?.name === staffName;
     };
 
     const generateDeskSchedule = () => {
@@ -87,7 +69,6 @@ function ScheduleGenerator() {
             const [year, month, day] = selectedDate.split('-').map(Number);
             const date = new Date(year, month - 1, day);
             const dayOfWeek = date.toLocaleDateString('en-US', { weekday: 'long' });
-            console.log('Processing schedule for:', dayOfWeek);
 
             const startColumn = `${dayOfWeek}Start`;
             const endColumn = `${dayOfWeek}End`;
@@ -99,91 +80,35 @@ function ScheduleGenerator() {
                 staff[endColumn] !== 'OFF'
             );
 
-            console.log('Working staff:', workingStaff);
-
             const schedule = {};
             
-            timeSlots.forEach((slot, slotIndex) => {
-                schedule[`${slot.start}-${slot.end}`] = {};
+            timeSlots.forEach(slot => {
+                const timeSlot = `${slot.start}-${slot.end}`;
+                schedule[timeSlot] = {};
                 const assignedStaff = new Set();
                 
-                // First pass: Assign staff to their primary preferred desk
                 desks.forEach(desk => {
-                    const availableStaff = workingStaff
-                        .filter(staff => 
-                            !assignedStaff.has(staff.Name) &&
-                            staff.PreferredDesk.split(',')[0].trim() === desk
-                        )
-                        .sort((a, b) => 
-                            getStaffPriority(a, desk, schedule, `${slot.start}-${slot.end}`, slotIndex) -
-                            getStaffPriority(b, desk, schedule, `${slot.start}-${slot.end}`, slotIndex)
-                        );
-                    
-                    if (availableStaff.length > 0) {
-                        schedule[`${slot.start}-${slot.end}`][desk] = {
-                            name: availableStaff[0].Name,
-                            isPrimaryPreference: true
+                    const availableStaff = workingStaff.filter(staff => {
+                        if (assignedStaff.has(staff.Name)) return false;
+                        if (calculateHoursWorked(staff.Name, schedule) >= 4) return false;
+                        if (hasWorkedConsecutiveHours(staff.Name, desk, schedule, timeSlot)) return false;
+                        return true;
+                    });
+
+                    // Try to assign someone with this desk as primary preference
+                    let assigned = false;
+                    const primaryStaff = availableStaff.find(staff => 
+                        staff.PreferredDesk.split(',')[0].trim() === desk
+                    );
+
+                    if (primaryStaff) {
+                        schedule[timeSlot][desk] = {
+                            name: primaryStaff.Name,
+                            isPrimaryPreference: true,
+                            hoursWorked: calculateHoursWorked(primaryStaff.Name, schedule)
                         };
-                        assignedStaff.add(availableStaff[0].Name);
+                        assignedStaff.add(primaryStaff.Name);
+                        assigned = true;
                     }
-                });
 
-                // Second pass: Fill remaining desks with staff who list it as any preference
-                desks.forEach(desk => {
-                    if (!schedule[`${slot.start}-${slot.end}`][desk]) {
-                        const availableStaff = workingStaff
-                            .filter(staff =>
-                                !assignedStaff.has(staff.Name) &&
-                                staff.PreferredDesk.includes(desk)
-                            )
-                            .sort((a, b) => 
-                                getStaffPriority(a, desk, schedule, `${slot.start}-${slot.end}`, slotIndex) -
-                                getStaffPriority(b, desk, schedule, `${slot.start}-${slot.end}`, slotIndex)
-                            );
-                        
-                        if (availableStaff.length > 0) {
-                            schedule[`${slot.start}-${slot.end}`][desk] = {
-                                name: availableStaff[0].Name,
-                                isPrimaryPreference: false
-                            };
-                            assignedStaff.add(availableStaff[0].Name);
-                        }
-                    }
-                });
-
-                // Final pass: Fill any remaining spots with any available staff
-                desks.forEach(desk => {
-                    if (!schedule[`${slot.start}-${slot.end}`][desk]) {
-                        const availableStaff = workingStaff
-                            .filter(staff => !assignedStaff.has(staff.Name))
-                            .sort((a, b) => 
-                                getStaffPriority(a, desk, schedule, `${slot.start}-${slot.end}`, slotIndex) -
-                                getStaffPriority(b, desk, schedule, `${slot.start}-${slot.end}`, slotIndex)
-                            );
-                        
-                        if (availableStaff.length > 0) {
-                            schedule[`${slot.start}-${slot.end}`][desk] = {
-                                name: availableStaff[0].Name,
-                                isPrimaryPreference: false
-                            };
-                            assignedStaff.add(availableStaff[0].Name);
-                        } else {
-                            schedule[`${slot.start}-${slot.end}`][desk] = {
-                                name: 'No staff available',
-                                isPrimaryPreference: false
-                            };
-                        }
-                    }
-                });
-            });
-
-            // Calculate and add hours worked info
-            Object.keys(schedule).forEach(timeSlot => {
-                Object.keys(schedule[timeSlot]).forEach(desk => {
-                    const staffInfo = schedule[timeSlot][desk];
-                    if (staffInfo.name !== 'No staff available') {
-                        let totalHours = 0;
-                        Object.entries(schedule).forEach(([slot, desks]) => {
-                            Object.values(desks).forEach(info => {
-                                if (info.name === staffInfo.name) {
-                                    const [start, end] = slot.split('-');
+                    // If no primary preference, try secondary
