@@ -5,7 +5,7 @@ function ScheduleGenerator() {
     const [error, setError] = React.useState('');
 
     const timeSlots = [
-        { start: '9:00', end: '11:00' },
+        { start: '09:00', end: '11:00' },
         { start: '11:00', end: '13:00' },
         { start: '13:00', end: '15:00' },
         { start: '15:00', end: '17:00' },
@@ -13,6 +13,14 @@ function ScheduleGenerator() {
     ];
 
     const desks = ['Reference Desk', 'Circulation Desk', 'Information Desk'];
+
+    const convertExcelTime = (excelTime) => {
+        if (excelTime === "OFF") return "OFF";
+        const totalHours = excelTime * 24;
+        const hours = Math.floor(totalHours);
+        const minutes = Math.round((totalHours - hours) * 60);
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    };
 
     const handleFileUpload = (event) => {
         const file = event.target.files[0];
@@ -24,29 +32,61 @@ function ScheduleGenerator() {
                 const workbook = XLSX.read(data, { type: 'array' });
                 const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
                 const jsonData = XLSX.utils.sheet_to_json(firstSheet);
-                setWeeklySchedule(jsonData);
+                
+                // Process the data to correct format
+                const processedData = jsonData.map(row => ({
+                    Name: row.__EMPTY,
+                    PreferredDesk: row.PreferredDesk,
+                    MondayStart: convertExcelTime(row.MondayStart),
+                    MondayEnd: convertExcelTime(row.MondayEnd),
+                    TuesdayStart: convertExcelTime(row.TuesdayStart),
+                    TuesdayEnd: convertExcelTime(row.TuesdayEnd),
+                    WednesdayStart: convertExcelTime(row.WednesdayStart),
+                    WednesdayEnd: convertExcelTime(row.WednesdayEnd),
+                    ThursdayStart: convertExcelTime(row.ThursdayStart),
+                    ThursdayEnd: convertExcelTime(row.ThursdayEnd),
+                    FridayStart: convertExcelTime(row.FridayStart),
+                    FridayEnd: convertExcelTime(row.FridayEnd),
+                    SaturdayStart: convertExcelTime(row.SaturdayStart),
+                    SaturdayEnd: convertExcelTime(row.SaturdayEnd)
+                }));
+                
+                console.log('Processed schedule data:', processedData);
+                setWeeklySchedule(processedData);
                 setError('');
             } catch (err) {
                 setError('Error processing Excel file: ' + err.message);
+                console.error('Excel processing error:', err);
             }
         };
 
         reader.readAsArrayBuffer(file);
     };
 
+    const timeToMinutes = (timeStr) => {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        return hours * 60 + minutes;
+    };
+
+    const isTimeInRange = (startTime, endTime, slotStart, slotEnd) => {
+        const start = timeToMinutes(startTime);
+        const end = timeToMinutes(endTime);
+        const slotStartMin = timeToMinutes(slotStart);
+        const slotEndMin = timeToMinutes(slotEnd);
+        return start <= slotStartMin && end >= slotEndMin;
+    };
+
     const calculateHoursWorked = (staffName, currentSchedule) => {
-        let hours = 0;
+        let minutes = 0;
         Object.entries(currentSchedule).forEach(([timeSlot, desks]) => {
             Object.values(desks).forEach(staffInfo => {
                 if (staffInfo.name === staffName) {
                     const [start, end] = timeSlot.split('-');
-                    const startHour = parseInt(start.split(':')[0]);
-                    const endHour = parseInt(end.split(':')[0]);
-                    hours += endHour - startHour;
+                    minutes += timeToMinutes(end) - timeToMinutes(start);
                 }
             });
         });
-        return hours;
+        return minutes / 60;
     };
 
     const hasWorkedConsecutiveHours = (staffName, desk, currentSchedule, currentSlot) => {
@@ -69,6 +109,7 @@ function ScheduleGenerator() {
             const [year, month, day] = selectedDate.split('-').map(Number);
             const date = new Date(year, month - 1, day);
             const dayOfWeek = date.toLocaleDateString('en-US', { weekday: 'long' });
+            console.log('Processing schedule for:', dayOfWeek);
 
             const startColumn = `${dayOfWeek}Start`;
             const endColumn = `${dayOfWeek}End`;
@@ -80,69 +121,65 @@ function ScheduleGenerator() {
                 staff[endColumn] !== 'OFF'
             );
 
+            console.log('Working staff:', workingStaff);
+
             const schedule = {};
             
             timeSlots.forEach(slot => {
                 const timeSlot = `${slot.start}-${slot.end}`;
                 schedule[timeSlot] = {};
                 const assignedStaff = new Set();
-                
+
+                // For each desk
                 desks.forEach(desk => {
+                    // Find available staff who prefer this desk and are working during this slot
                     const availableStaff = workingStaff.filter(staff => {
                         if (assignedStaff.has(staff.Name)) return false;
                         if (calculateHoursWorked(staff.Name, schedule) >= 4) return false;
                         if (hasWorkedConsecutiveHours(staff.Name, desk, schedule, timeSlot)) return false;
-                        return true;
+                        
+                        return isTimeInRange(
+                            staff[startColumn],
+                            staff[endColumn],
+                            slot.start,
+                            slot.end
+                        );
                     });
 
-                    // Try to assign someone with this desk as primary preference
-                    let assigned = false;
-                    const primaryStaff = availableStaff.find(staff => 
-                        staff.PreferredDesk.split(',')[0].trim() === desk
-                    );
+                    // Sort by preference
+                    const staffForDesk = availableStaff
+                        .filter(staff => staff.PreferredDesk === desk)
+                        .sort((a, b) => calculateHoursWorked(a.Name, schedule) - calculateHoursWorked(b.Name, schedule));
 
-                    if (primaryStaff) {
+                    if (staffForDesk.length > 0) {
+                        const selectedStaff = staffForDesk[0];
                         schedule[timeSlot][desk] = {
-                            name: primaryStaff.Name,
+                            name: selectedStaff.Name,
                             isPrimaryPreference: true,
-                            hoursWorked: calculateHoursWorked(primaryStaff.Name, schedule)
+                            hoursWorked: calculateHoursWorked(selectedStaff.Name, schedule)
                         };
-                        assignedStaff.add(primaryStaff.Name);
-                        assigned = true;
-                    }
+                        assignedStaff.add(selectedStaff.Name);
+                    } else {
+                        // If no preferred staff, assign anyone available
+                        const anyAvailable = availableStaff
+                            .filter(staff => !assignedStaff.has(staff.Name))
+                            .sort((a, b) => calculateHoursWorked(a.Name, schedule) - calculateHoursWorked(b.Name, schedule));
 
-                    // If no primary preference, try secondary
-                    if (!assigned) {
-                        const secondaryStaff = availableStaff.find(staff => 
-                            staff.PreferredDesk.split(',').map(d => d.trim()).includes(desk)
-                        );
-
-                        if (secondaryStaff) {
+                        if (anyAvailable.length > 0) {
+                            const selectedStaff = anyAvailable[0];
                             schedule[timeSlot][desk] = {
-                                name: secondaryStaff.Name,
+                                name: selectedStaff.Name,
                                 isPrimaryPreference: false,
-                                hoursWorked: calculateHoursWorked(secondaryStaff.Name, schedule)
+                                hoursWorked: calculateHoursWorked(selectedStaff.Name, schedule)
                             };
-                            assignedStaff.add(secondaryStaff.Name);
-                            assigned = true;
+                            assignedStaff.add(selectedStaff.Name);
+                        } else {
+                            schedule[timeSlot][desk] = {
+                                name: 'No staff available',
+                                isPrimaryPreference: false,
+                                hoursWorked: 0
+                            };
                         }
-                    }
-
-                    // If still not assigned, assign anyone available
-                    if (!assigned && availableStaff.length > 0) {
-                        const staffMember = availableStaff[0];
-                        schedule[timeSlot][desk] = {
-                            name: staffMember.Name,
-                            isPrimaryPreference: false,
-                            hoursWorked: calculateHoursWorked(staffMember.Name, schedule)
-                        };
-                        assignedStaff.add(staffMember.Name);
-                    } else if (!assigned) {
-                        schedule[timeSlot][desk] = {
-                            name: 'No staff available',
-                            isPrimaryPreference: false,
-                            hoursWorked: 0
-                        };
                     }
                 });
             });
@@ -151,6 +188,7 @@ function ScheduleGenerator() {
             setError('');
         } catch (err) {
             setError('Error generating schedule: ' + err.message);
+            console.error('Schedule generation error:', err);
         }
     };
 
@@ -213,7 +251,7 @@ function ScheduleGenerator() {
                                                 <div>{staffInfo.name}</div>
                                                 {staffInfo.name !== 'No staff available' && (
                                                     <div className="text-xs text-gray-600">
-                                                        Hours worked: {staffInfo.hoursWorked}
+                                                        Hours worked: {staffInfo.hoursWorked.toFixed(1)}
                                                         {staffInfo.isPrimaryPreference && 
                                                             <span className="text-green-600 ml-2">Primary Preference</span>
                                                         }
