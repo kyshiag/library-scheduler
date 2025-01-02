@@ -12,7 +12,7 @@ function ScheduleGenerator() {
         { start: '17:00', end: '18:00' }
     ];
 
-    const desks = ['Reference Desk', 'Circulation Desk', 'Information Desk'];
+    const desks = ['Reference Desk', 'Circulation Desk', 'Youth Desk'];
 
     const convertExcelTime = (excelTime) => {
         if (excelTime === "OFF") return "OFF";
